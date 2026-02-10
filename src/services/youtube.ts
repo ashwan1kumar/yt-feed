@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Backend server URL
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = process.env.PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
 export interface Video {
   id: string;

@@ -9,16 +9,12 @@ import youtubedl from 'youtube-dl-exec';
 const app = express();
 const PORT = 3001;
 
-// Initialize cache with 5 minute TTL
 const cache = new NodeCache({ stdTTL: 300 });
 
-// Limit concurrent requests to avoid overwhelming servers
-const limit = pLimit(10); // Process 10 channels concurrently
+const limit = pLimit(10);
 
-// Configure youtube-dl-exec to use yt-dlp
-const ytdlp = youtubedl.create('/opt/homebrew/bin/yt-dlp');
+const ytdlp = youtubedl.create(process.env.YTDLP_PATH || '/opt/homebrew/bin/yt-dlp');
 
-// Global error handlers to prevent server crashes
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   // Don't exit the process
@@ -153,7 +149,6 @@ async function fetchChannelVideos(channel) {
   }
 }
 
-// Get channel videos using RSS feed (more reliable)
 app.get('/api/channel/:channelId/videos', async (req, res) => {
   try {
     const { channelId } = req.params;
@@ -165,13 +160,11 @@ app.get('/api/channel/:channelId/videos', async (req, res) => {
   }
 });
 
-// Get detailed channel information
 app.get('/api/channel/:channelId/info', async (req, res) => {
   try {
     const { channelId } = req.params;
     const cacheKey = `channelInfo:${channelId}`;
     
-    // Check cache first
     const cachedInfo = cache.get(cacheKey);
     if (cachedInfo) {
       console.log(`Cache hit for channel info: ${channelId}`);
@@ -180,7 +173,6 @@ app.get('/api/channel/:channelId/info', async (req, res) => {
     
     console.log(`Fetching channel info for: ${channelId}`);
     
-    // Use youtube-dl-exec to get channel info
     const channelUrl = `https://www.youtube.com/channel/${channelId}`;
     
     try {
@@ -210,7 +202,6 @@ app.get('/api/channel/:channelId/info', async (req, res) => {
         createdAt: null // Not available through yt-dlp
       };
       
-      // Try to get better profile image from thumbnails
       if (info.thumbnails && info.thumbnails.length > 0) {
         // Get the highest quality thumbnail
         const bestThumbnail = info.thumbnails.reduce((best, current) => {
@@ -252,7 +243,6 @@ app.get('/api/channel/:channelId/info', async (req, res) => {
   }
 });
 
-// Get multiple channels' info in batch
 app.post('/api/channels/info', async (req, res) => {
   try {
     const { channelIds } = req.body;
@@ -289,7 +279,6 @@ app.post('/api/channels/info', async (req, res) => {
   }
 });
 
-// Get video info including available formats
 app.get('/api/video/:videoId/info', async (req, res) => {
   try {
     const { videoId } = req.params;
@@ -314,12 +303,10 @@ app.get('/api/video/:videoId/info', async (req, res) => {
       addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
     });
     
-    // Get available video-only formats for quality selection
     const videoFormats = info.formats
       .filter(format => format.vcodec !== 'none' && format.height)
       .filter(format => format.height >= 360 && format.height <= 1440)
       .reduce((acc, format) => {
-        // Keep only the best format for each resolution
         const key = `${format.height}p`;
         if (!acc[key] || (format.tbr || 0) > (acc[key].tbr || 0)) {
           acc[key] = format;
@@ -327,7 +314,6 @@ app.get('/api/video/:videoId/info', async (req, res) => {
         return acc;
       }, {});
     
-    // Convert to array and sort by height
     const formats = Object.values(videoFormats)
       .map(f => ({
         quality: f.format_note || `${f.height}p`,
@@ -352,7 +338,6 @@ app.get('/api/video/:videoId/info', async (req, res) => {
       categories: info.categories || []
     };
     
-    // Cache the result for 1 hour
     cache.set(cacheKey, videoDetails, 3600);
     
     res.json(videoDetails);
@@ -466,25 +451,20 @@ app.get('/api/video/:videoId/stream', async (req, res) => {
         processKilled = true;
         console.log('Client disconnected, cleaning up yt-dlp process');
         
-        // Remove all listeners to prevent errors
         ytdlProcess.stdout.removeAllListeners();
         ytdlProcess.stderr.removeAllListeners();
         ytdlProcess.removeAllListeners();
         
-        // First try SIGTERM for graceful shutdown
         try {
-          // Don't use kill() method, use process.kill with PID
           if (ytdlProcess.pid) {
             process.kill(ytdlProcess.pid, 'SIGTERM');
             
-            // If it doesn't exit within 2 seconds, force kill
             setTimeout(() => {
               try {
                 if (ytdlProcess.pid) {
                   process.kill(ytdlProcess.pid, 'SIGKILL');
                 }
               } catch (err) {
-                // Process might already be dead
               }
             }, 2000);
           }
@@ -495,7 +475,6 @@ app.get('/api/video/:videoId/stream', async (req, res) => {
       }
     };
     
-    // Handle various disconnect scenarios
     req.on('close', cleanup);
     req.on('error', cleanup);
     res.on('close', cleanup);
@@ -509,7 +488,6 @@ app.get('/api/video/:videoId/stream', async (req, res) => {
   }
 });
 
-// Get multiple channels' videos with proper SSE streaming
 app.post('/api/channels/videos/stream', async (req, res) => {
   try {
     const { channels } = req.body;
@@ -523,7 +501,6 @@ app.post('/api/channels/videos/stream', async (req, res) => {
       'X-Accel-Buffering': 'no' // Disable buffering for nginx
     });
     
-    // Send initial connection message
     res.write('data: {"type": "connected"}\n\n');
     
     // Keep connection alive
@@ -531,7 +508,6 @@ app.post('/api/channels/videos/stream', async (req, res) => {
       res.write(': keepalive\n\n');
     }, 30000);
     
-    // Process channels in batches
     const batchSize = 5;
     const batches = [];
     
@@ -542,22 +518,18 @@ app.post('/api/channels/videos/stream', async (req, res) => {
     let totalProcessed = 0;
     const allVideos = [];
     
-    // Process each batch
     for (const batch of batches) {
-      // Process batch concurrently
       const batchPromises = batch.map(channel => 
         limit(() => fetchChannelVideos(channel))
       );
       
       const batchResults = await Promise.all(batchPromises);
       
-      // Flatten and add to all videos
       const batchVideos = batchResults.flat();
       allVideos.push(...batchVideos);
       
       totalProcessed += batch.length;
       
-      // Stream the batch results immediately
       const data = {
         type: 'batch',
         videos: batchVideos,
@@ -592,13 +564,11 @@ app.post('/api/channels/videos/stream', async (req, res) => {
   }
 });
 
-// Get multiple channels' videos (non-streaming, with batching)
 app.post('/api/channels/videos', async (req, res) => {
   try {
     const { channels } = req.body;
     console.log(`Fetching videos for ${channels.length} channels with batching`);
     
-    // Process channels in batches
     const batchSize = 10;
     const batches = [];
     
@@ -608,7 +578,6 @@ app.post('/api/channels/videos', async (req, res) => {
     
     const allVideos = [];
     
-    // Process all batches concurrently
     const allBatchPromises = batches.map(batch => {
       const batchPromises = batch.map(channel => 
         limit(() => fetchChannelVideos(channel))
@@ -618,7 +587,6 @@ app.post('/api/channels/videos', async (req, res) => {
     
     const allBatchResults = await Promise.all(allBatchPromises);
     
-    // Flatten all results
     allBatchResults.forEach(batchResults => {
       batchResults.forEach(videos => {
         allVideos.push(...videos);
@@ -637,21 +605,17 @@ app.post('/api/channels/videos', async (req, res) => {
   }
 });
 
-// Get video details with caching
 app.get('/api/video/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     const cacheKey = `video:${videoId}`;
     
-    // Check cache first
     const cachedVideo = cache.get(cacheKey);
     if (cachedVideo) {
       console.log(`Cache hit for video: ${videoId}`);
       return res.json(cachedVideo);
     }
     
-    // For now, return minimal data since we can't scrape video pages reliably
-    // The frontend will play videos directly using the videoId
     const video = {
       id: videoId,
       snippet: {
