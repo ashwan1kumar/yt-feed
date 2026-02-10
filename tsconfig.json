@@ -13,6 +13,7 @@
     "resolveJsonModule": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "outDir": "public/",
 
     /* type checking */
     "strict": true,
